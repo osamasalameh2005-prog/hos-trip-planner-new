@@ -8,10 +8,13 @@ class Trip(models.Model):
 
     current_cycle_used = models.FloatField()
 
-    total_distance_miles = models.FloatField(default=0)
-    total_driving_hours = models.FloatField(default=0)
+    distance_miles = models.FloatField(default=0)
+    duration_hours = models.FloatField(default=0)
+
+    route = models.JSONField(default=dict)
+    plan = models.JSONField(default=dict)
 
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"{self.current_location} → {self.dropoff_location}"
+        return f"{self.current_location} -> {self.dropoff_location}"
