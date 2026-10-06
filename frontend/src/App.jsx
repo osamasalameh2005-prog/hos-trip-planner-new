@@ -1,475 +1,274 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   MapContainer,
   Marker,
   Popup,
   Polyline,
   TileLayer,
-  useMap,
 } from "react-leaflet";
 
-import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "./App.css";
 
+const API_URL = `${
+  import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"
+}/api/trips/`;
 
-const API_URL = "http://127.0.0.1:8000/api/trips/";
-
-const defaultCenter = [31.95, 35.91];
-
-
-function MapUpdater({ locations }) {
-  const map = useMap();
-
-  useEffect(() => {
-    const points = [
-      locations?.current,
-      locations?.pickup,
-      locations?.dropoff,
-    ].filter(Boolean);
-
-    if (points.length === 0) {
-      return;
-    }
-
-    const bounds = L.latLngBounds(
-      points.map((point) => [
-        point.lat,
-        point.lon,
-      ])
-    );
-
-    map.fitBounds(bounds, {
-      padding: [40, 40],
-    });
-  }, [locations, map]);
-
-  return null;
-}
-
-
-function LocationInput({
-  label,
-  value,
-  onChange,
-  onSelect,
-  selected,
-}) {
-  const [suggestions, setSuggestions] = useState([]);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    if (!value || value.length < 3 || selected) {
-      setSuggestions([]);
-      return;
-    }
-
-    const timer = setTimeout(async () => {
-      try {
-        setLoading(true);
-
-        const url =
-          "https://nominatim.openstreetmap.org/search?" +
-          new URLSearchParams({
-            q: value,
-            format: "json",
-            addressdetails: "1",
-            limit: "5",
-          });
-
-        const response = await fetch(url);
-
-        if (!response.ok) {
-          throw new Error("Location search failed.");
-        }
-
-        const data = await response.json();
-
-        setSuggestions(data);
-      } catch {
-        setSuggestions([]);
-      } finally {
-        setLoading(false);
-      }
-    }, 600);
-
-    return () => clearTimeout(timer);
-  }, [value, selected]);
-
-  return (
-    <div className="location-field">
-      <label>{label}</label>
-
-      <input
-        value={value}
-        placeholder={`Search ${label}`}
-        onChange={(event) => {
-          onChange(event.target.value);
-          onSelect(null);
-        }}
-        onFocus={() => {
-          if (selected) {
-            onChange("");
-            onSelect(null);
-          }
-        }}
-      />
-
-      {loading && (
-        <div className="suggestion-status">
-          Searching...
-        </div>
-      )}
-
-      {suggestions.length > 0 && (
-        <div className="suggestions">
-          {suggestions.map((item) => (
-            <button
-              type="button"
-              className="suggestion"
-              key={item.place_id}
-              onClick={() => {
-                onChange(item.display_name);
-                onSelect(item);
-                setSuggestions([]);
-              }}
-            >
-              {item.display_name}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-
-function ELDGraph({ day }) {
-  const events = day.events || [];
-
-  return (
-    <div className="eld-card">
-      <h3>
-        Day {day.day}
-        {day.restart ? " - 34 Hour Restart" : ""}
-      </h3>
-
-      <div className="eld-details">
-
-        {events.length === 0 && (
-          <p>No events recorded.</p>
-        )}
-
-        {events.map((event, index) => (
-          <div
-            className="eld-log"
-            key={index}
-          >
-            <strong>
-              {event.type
-                .replaceAll("_", " ")
-                .toUpperCase()}
-            </strong>
-
-            <span>
-              {event.hours} hours
-            </span>
-
-            <small>
-              {event.description || ""}
-            </small>
-          </div>
-        ))}
-
-      </div>
-
-      <div className="summary-grid">
-
-        <div>
-          <span>Driving</span>
-          <strong>
-            {day.driving_hours} hours
-          </strong>
-        </div>
-
-        <div>
-          <span>On Duty</span>
-          <strong>
-            {day.on_duty_hours} hours
-          </strong>
-        </div>
-
-        <div>
-          <span>Miles</span>
-          <strong>
-            {day.miles} miles
-          </strong>
-        </div>
-
-      </div>
-    </div>
-  );
-}
-
+const NOMINATIM_URL =
+  "https://nominatim.openstreetmap.org/search";
 
 function App() {
+  const [currentLocation, setCurrentLocation] = useState("");
+  const [pickupLocation, setPickupLocation] = useState("");
+  const [dropoffLocation, setDropoffLocation] = useState("");
+  const [cycleUsed, setCycleUsed] = useState("");
 
-  const [currentLocation, setCurrentLocation] =
-    useState("");
+  const [currentSuggestions, setCurrentSuggestions] = useState([]);
+  const [pickupSuggestions, setPickupSuggestions] = useState([]);
+  const [dropoffSuggestions, setDropoffSuggestions] = useState([]);
 
-  const [pickupLocation, setPickupLocation] =
-    useState("");
+  const [trip, setTrip] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
-  const [dropoffLocation, setDropoffLocation] =
-    useState("");
-
-  const [currentSelected, setCurrentSelected] =
-    useState(null);
-
-  const [pickupSelected, setPickupSelected] =
-    useState(null);
-
-  const [dropoffSelected, setDropoffSelected] =
-    useState(null);
-
-  const [cycleUsed, setCycleUsed] =
-    useState("");
-
-  const [result, setResult] =
-    useState(null);
-
-  const [loading, setLoading] =
-    useState(false);
-
-  const [error, setError] =
-    useState("");
-
-
-  async function createTrip(event) {
-
-    event.preventDefault();
-
-    setError("");
-    setResult(null);
-
-    if (!currentSelected) {
-      setError(
-        "Please select Current Location from the suggestions."
-      );
+  async function searchLocation(value, setter) {
+    if (!value || value.length < 3) {
+      setter([]);
       return;
     }
-
-    if (!pickupSelected) {
-      setError(
-        "Please select Pickup Location from the suggestions."
-      );
-      return;
-    }
-
-    if (!dropoffSelected) {
-      setError(
-        "Please select Dropoff Location from the suggestions."
-      );
-      return;
-    }
-
-    if (cycleUsed === "") {
-      setError(
-        "Please enter Current Cycle Used."
-      );
-      return;
-    }
-
-    const cycle = Number(cycleUsed);
-
-    if (
-      Number.isNaN(cycle) ||
-      cycle < 0 ||
-      cycle > 70
-    ) {
-      setError(
-        "Current Cycle Used must be between 0 and 70."
-      );
-      return;
-    }
-
 
     try {
-
-      setLoading(true);
-
       const response = await fetch(
-        API_URL,
-        {
-          method: "POST",
-
-          headers: {
-            "Content-Type":
-              "application/json",
-          },
-
-          body: JSON.stringify({
-            current_location:
-              currentSelected.display_name,
-
-            pickup_location:
-              pickupSelected.display_name,
-
-            dropoff_location:
-              dropoffSelected.display_name,
-
-            current_cycle_used:
-              cycle,
-          }),
-        }
+        `${NOMINATIM_URL}?q=${encodeURIComponent(
+          value
+        )}&format=json&limit=5&addressdetails=1`
       );
 
-
-      const data =
-        await response.json();
-
-
-      if (!response.ok) {
-        throw new Error(
-          data.error ||
-          "Could not create trip."
-        );
-      }
-
-
-      setResult(data);
-
-    } catch (requestError) {
-
-      setError(
-        requestError.message ||
-        "Something went wrong."
-      );
-
-    } finally {
-
-      setLoading(false);
-
+      const data = await response.json();
+      setter(data);
+    } catch {
+      setter([]);
     }
   }
 
+  function selectSuggestion(item, setter) {
+    setter(item.display_name);
+  }
 
-  const locations =
-    result?.route?.locations || {};
+  async function createTrip(event) {
+    event.preventDefault();
 
-  const segments =
-    result?.route?.segments || [];
+    setError("");
+    setTrip(null);
+    setLoading(true);
 
-  const plan =
-    result?.plan || {};
+    try {
+      const response = await fetch(API_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          current_location: currentLocation,
+          pickup_location: pickupLocation,
+          dropoff_location: dropoffLocation,
+          current_cycle_used: Number(cycleUsed),
+        }),
+      });
 
-  const days =
-    plan.days || [];
+      const data = await response.json();
 
-  const assumptions =
-    plan.assumptions || {};
+      if (!response.ok) {
+        throw new Error(
+          data.error || "Failed to create trip."
+        );
+      }
 
-  const summary =
-    plan.summary || {};
+      setTrip(data);
+    } catch (err) {
+      setError(
+        err.message || "فشل في جلب بيانات الرحلة."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
 
+  const mapCenter = useMemo(() => {
+    if (
+      trip?.route?.locations?.current
+    ) {
+      return [
+        trip.route.locations.current.lat,
+        trip.route.locations.current.lon,
+      ];
+    }
 
-  const currentToPickup =
-    segments.find(
-      (segment) =>
-        segment.name === "Current → Pickup"
+    return [31.95, 35.91];
+  }, [trip]);
+
+  function geometryToPositions(geometry) {
+    if (!geometry?.coordinates) {
+      return [];
+    }
+
+    return geometry.coordinates.map(
+      ([lon, lat]) => [lat, lon]
     );
+  }
 
-  const pickupToDropoff =
-    segments.find(
-      (segment) =>
-        segment.name === "Pickup → Dropoff"
-    );
-
+  useEffect(() => {
+    document.title = "HOS Trip Planner";
+  }, []);
 
   return (
     <div className="app">
-
       <header className="header">
-
         <div>
-
-          <h1>
-            HOS Trip Planner
-          </h1>
-
+          <h1>HOS Trip Planner</h1>
           <p>
-            Route planning and ELD daily logs
+            تخطيط المسار والسجلات اليومية الإلكترونية
           </p>
-
         </div>
-
       </header>
 
-
       <main className="container">
-
-
-        {/* Trip Form */}
-
-        <section className="panel">
-
-          <h2>
-            Trip Information
-          </h2>
-
+        <section className="card">
+          <h2>معلومات الرحلة</h2>
 
           <form onSubmit={createTrip}>
+            <div className="field">
+              <label>الموقع الحالي</label>
 
+              <input
+                type="text"
+                value={currentLocation}
+                onChange={(e) => {
+                  setCurrentLocation(e.target.value);
+                  searchLocation(
+                    e.target.value,
+                    setCurrentSuggestions
+                  );
+                }}
+                placeholder="مثال: عمان، الأردن"
+                required
+              />
 
-            <LocationInput
-              label="Current Location"
-              value={currentLocation}
-              onChange={setCurrentLocation}
-              onSelect={setCurrentSelected}
-              selected={currentSelected}
-            />
-
-
-            <LocationInput
-              label="Pickup Location"
-              value={pickupLocation}
-              onChange={setPickupLocation}
-              onSelect={setPickupSelected}
-              selected={pickupSelected}
-            />
-
-
-            <LocationInput
-              label="Dropoff Location"
-              value={dropoffLocation}
-              onChange={setDropoffLocation}
-              onSelect={setDropoffSelected}
-              selected={dropoffSelected}
-            />
-
+              {currentSuggestions.length > 0 && (
+                <div className="suggestions">
+                  {currentSuggestions.map((item) => (
+                    <button
+                      type="button"
+                      key={item.place_id}
+                      onClick={() => {
+                        selectSuggestion(
+                          item,
+                          setCurrentLocation
+                        );
+                        setCurrentSuggestions([]);
+                      }}
+                    >
+                      {item.display_name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
 
             <div className="field">
+              <label>موقع الاستلام</label>
 
+              <input
+                type="text"
+                value={pickupLocation}
+                onChange={(e) => {
+                  setPickupLocation(e.target.value);
+                  searchLocation(
+                    e.target.value,
+                    setPickupSuggestions
+                  );
+                }}
+                placeholder="مثال: الزرقاء، الأردن"
+                required
+              />
+
+              {pickupSuggestions.length > 0 && (
+                <div className="suggestions">
+                  {pickupSuggestions.map((item) => (
+                    <button
+                      type="button"
+                      key={item.place_id}
+                      onClick={() => {
+                        selectSuggestion(
+                          item,
+                          setPickupLocation
+                        );
+                        setPickupSuggestions([]);
+                      }}
+                    >
+                      {item.display_name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="field">
+              <label>موقع التسليم</label>
+
+              <input
+                type="text"
+                value={dropoffLocation}
+                onChange={(e) => {
+                  setDropoffLocation(e.target.value);
+                  searchLocation(
+                    e.target.value,
+                    setDropoffSuggestions
+                  );
+                }}
+                placeholder="مثال: الطفيلة، الأردن"
+                required
+              />
+
+              {dropoffSuggestions.length > 0 && (
+                <div className="suggestions">
+                  {dropoffSuggestions.map((item) => (
+                    <button
+                      type="button"
+                      key={item.place_id}
+                      onClick={() => {
+                        selectSuggestion(
+                          item,
+                          setDropoffLocation
+                        );
+                        setDropoffSuggestions([]);
+                      }}
+                    >
+                      {item.display_name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="field">
               <label>
-                Current Cycle Used (hours)
+                عدد الساعات المستخدمة في الدورة الحالية
               </label>
 
               <input
                 type="number"
                 min="0"
                 max="70"
-                step="0.01"
+                step="0.1"
                 value={cycleUsed}
-                placeholder="Example: 10"
-                onChange={(event) =>
-                  setCycleUsed(
-                    event.target.value
-                  )
+                onChange={(e) =>
+                  setCycleUsed(e.target.value)
                 }
+                placeholder="مثال: 10"
+                required
               />
-
             </div>
-
 
             {error && (
               <div className="error">
@@ -477,502 +276,277 @@ function App() {
               </div>
             )}
 
-
             <button
-              className="primary-button"
+              className="submit-button"
               type="submit"
               disabled={loading}
             >
-
               {loading
-                ? "Calculating..."
-                : "Create Trip"}
-
+                ? "جاري إنشاء الرحلة..."
+                : "إنشاء رحلة"}
             </button>
-
-
           </form>
-
         </section>
 
-
-
-        {/* Result */}
-
-        {result && (
-
+        {trip && (
           <>
-
-
-            <section className="panel">
-
-              <h2>
-                Trip Result
-              </h2>
-
+            <section className="card">
+              <h2>ملخص الرحلة</h2>
 
               <div className="summary-grid">
-
-
                 <div>
-
-                  <span>
-                    Current Cycle Used
-                  </span>
-
                   <strong>
-                    {result.current_cycle_used}
-                    {" "}hours
+                    المسافة
                   </strong>
-
+                  <span>
+                    {trip.distance_miles} miles
+                  </span>
                 </div>
 
-
                 <div>
-
-                  <span>
-                    Cycle Remaining
-                  </span>
-
                   <strong>
-                    {summary.cycle_remaining_before_trip}
-                    {" "}hours
+                    مدة القيادة
                   </strong>
-
+                  <span>
+                    {trip.duration_hours} hours
+                  </span>
                 </div>
 
-
                 <div>
-
-                  <span>
-                    Total Distance
-                  </span>
-
                   <strong>
-                    {result.distance_miles}
-                    {" "}miles
+                    الدورة المستخدمة
                   </strong>
-
-                </div>
-
-
-                <div>
-
                   <span>
-                    Estimated Driving
+                    {trip.current_cycle_used} hours
                   </span>
-
-                  <strong>
-                    {result.duration_hours}
-                    {" "}hours
-                  </strong>
-
                 </div>
-
-
-                <div>
-
-                  <span>
-                    Current → Pickup
-                  </span>
-
-                  <strong>
-                    {currentToPickup
-                      ? currentToPickup.distance_miles
-                      : 0}
-                    {" "}miles
-                  </strong>
-
-                  <small>
-                    {currentToPickup
-                      ? currentToPickup.duration_hours
-                      : 0}
-                    {" "}hours
-                  </small>
-
-                </div>
-
-
-                <div>
-
-                  <span>
-                    Pickup → Dropoff
-                  </span>
-
-                  <strong>
-                    {pickupToDropoff
-                      ? pickupToDropoff.distance_miles
-                      : 0}
-                    {" "}miles
-                  </strong>
-
-                  <small>
-                    {pickupToDropoff
-                      ? pickupToDropoff.duration_hours
-                      : 0}
-                    {" "}hours
-                  </small>
-
-                </div>
-
-
-                <div>
-
-                  <span>
-                    Trip Days
-                  </span>
-
-                  <strong>
-                    {days.length}
-                  </strong>
-
-                </div>
-
-
               </div>
-
             </section>
 
-
-
-            {/* Map */}
-
-            <section className="panel">
-
-              <h2>
-                Route Map
-              </h2>
-
+            <section className="card">
+              <h2>الخريطة</h2>
 
               <div className="map-container">
-
                 <MapContainer
-                  center={defaultCenter}
+                  center={mapCenter}
                   zoom={7}
                   scrollWheelZoom={true}
-                  className="map"
+                  style={{
+                    height: "500px",
+                    width: "100%",
+                  }}
                 >
-
-
                   <TileLayer
-                    attribution="&copy; OpenStreetMap contributors"
+                    attribution='&copy; OpenStreetMap contributors'
                     url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                   />
 
-
-                  <MapUpdater
-                    locations={locations}
-                  />
-
-
-                  {locations.current && (
-
+                  {trip.route.locations.current && (
                     <Marker
                       position={[
-                        locations.current.lat,
-                        locations.current.lon,
+                        trip.route.locations.current.lat,
+                        trip.route.locations.current.lon,
                       ]}
                     >
-
                       <Popup>
-
-                        <strong>
-                          Current Location
-                        </strong>
-
+                        الموقع الحالي
                         <br />
-
-                        {
-                          locations.current
-                            .display_name
-                        }
-
+                        {currentLocation}
                       </Popup>
-
                     </Marker>
-
                   )}
 
-
-                  {locations.pickup && (
-
+                  {trip.route.locations.pickup && (
                     <Marker
                       position={[
-                        locations.pickup.lat,
-                        locations.pickup.lon,
+                        trip.route.locations.pickup.lat,
+                        trip.route.locations.pickup.lon,
                       ]}
                     >
-
                       <Popup>
-
-                        <strong>
-                          Pickup
-                        </strong>
-
+                        موقع الاستلام
                         <br />
-
-                        {
-                          locations.pickup
-                            .display_name
-                        }
-
+                        {pickupLocation}
                       </Popup>
-
                     </Marker>
-
                   )}
 
-
-                  {locations.dropoff && (
-
+                  {trip.route.locations.dropoff && (
                     <Marker
                       position={[
-                        locations.dropoff.lat,
-                        locations.dropoff.lon,
+                        trip.route.locations.dropoff.lat,
+                        trip.route.locations.dropoff.lon,
                       ]}
                     >
-
                       <Popup>
-
-                        <strong>
-                          Dropoff
-                        </strong>
-
+                        موقع التسليم
                         <br />
-
-                        {
-                          locations.dropoff
-                            .display_name
-                        }
-
+                        {dropoffLocation}
                       </Popup>
-
                     </Marker>
-
                   )}
 
-
-                  {currentToPickup && (
-
-                    <Polyline
-                      positions={
-                        currentToPickup.geometry.coordinates.map(
-                          ([lon, lat]) => [
-                            lat,
-                            lon,
-                          ]
-                        )
-                      }
-
-                      pathOptions={{
-                        color: "#2563eb",
-                        weight: 5,
-                      }}
-                    />
-
+                  {trip.route.segments?.map(
+                    (segment, index) => (
+                      <Polyline
+                        key={index}
+                        positions={geometryToPositions(
+                          segment.geometry
+                        )}
+                      />
+                    )
                   )}
-
-
-                  {pickupToDropoff && (
-
-                    <Polyline
-                      positions={
-                        pickupToDropoff.geometry.coordinates.map(
-                          ([lon, lat]) => [
-                            lat,
-                            lon,
-                          ]
-                        )
-                      }
-
-                      pathOptions={{
-                        color: "#16a34a",
-                        weight: 5,
-                      }}
-                    />
-
-                  )}
-
-
                 </MapContainer>
-
               </div>
-
             </section>
 
+            <section className="card">
+              <h2>تعليمات الطريق</h2>
 
+              {trip.route.segments?.map(
+                (segment, index) => (
+                  <div
+                    className="route-section"
+                    key={index}
+                  >
+                    <h3>{segment.name}</h3>
 
-            {/* Route Instructions */}
-
-            <section className="panel">
-
-              <h2>
-                Route Instructions
-              </h2>
-
-
-              {segments.map(
-                (segment) => (
-
-                  <div key={segment.name}>
-
-                    <h3>
-                      {segment.name}
-                    </h3>
-
+                    <p>
+                      المسافة:{" "}
+                      {segment.distance_miles} miles
+                      {" | "}
+                      المدة:{" "}
+                      {segment.duration_hours} hours
+                    </p>
 
                     <ol>
-
-                      {segment.steps.map(
-                        (step, index) => (
-
-                          <li key={index}>
-
+                      {segment.steps
+                        ?.slice(0, 30)
+                        .map((step, stepIndex) => (
+                          <li key={stepIndex}>
                             {step.instruction}
-
                             {" — "}
-
-                            {step.distance_miles}
-                            {" "}miles
-
+                            {step.distance_miles} miles
                           </li>
-
-                        )
-                      )}
-
+                        ))}
                     </ol>
-
                   </div>
-
                 )
               )}
-
             </section>
 
-
-
-            {/* ELD */}
-
-            <section className="panel">
-
+            <section className="card">
               <h2>
-                ELD Daily Logs
+                Daily Log Sheets / ELD Logs
               </h2>
 
+              {trip.plan?.days?.map((day) => (
+                <div
+                  className="eld-day"
+                  key={day.day}
+                >
+                  <h3>
+                    Day {day.day}
+                  </h3>
 
-              {days.map(
-                (day) => (
+                  {day.restart && (
+                    <div className="eld-event">
+                      <strong>
+                        34-hour restart
+                      </strong>
 
-                  <ELDGraph
-                    key={day.day}
-                    day={day}
-                  />
+                      <span>
+                        34 hours Off Duty
+                      </span>
+                    </div>
+                  )}
 
-                )
-              )}
+                  {day.events?.map(
+                    (event, index) => (
+                      <div
+                        className="eld-event"
+                        key={index}
+                      >
+                        <strong>
+                          {event.type}
+                        </strong>
 
+                        <span>
+                          {event.description ||
+                            `${event.hours} hours`}
+                        </span>
+
+                        {event.miles !== undefined && (
+                          <span>
+                            {event.miles} miles
+                          </span>
+                        )}
+                      </div>
+                    )
+                  )}
+
+                  <div className="day-summary">
+                    <span>
+                      Driving:{" "}
+                      {day.driving_hours} h
+                    </span>
+
+                    <span>
+                      On Duty:{" "}
+                      {day.on_duty_hours} h
+                    </span>
+
+                    <span>
+                      Miles:{" "}
+                      {day.miles}
+                    </span>
+                  </div>
+                </div>
+              ))}
             </section>
 
+            <section className="card">
+              <h2>الافتراضات</h2>
 
+              <ul>
+                <li>
+                  الحد الأقصى للدورة: 70 ساعة / 8 أيام
+                </li>
 
-            {/* HOS Assumptions */}
+                <li>
+                  القيادة اليومية: 11 ساعة
+                </li>
 
-            <section className="panel">
+                <li>
+                  نافذة العمل اليومية: 14 ساعة
+                </li>
 
-              <h2>
-                HOS Assumptions
-              </h2>
+                <li>
+                  استراحة 30 دقيقة بعد 8 ساعات قيادة
+                </li>
 
+                <li>
+                  الاستلام: ساعة واحدة
+                </li>
 
-              <div className="summary-grid">
+                <li>
+                  التسليم: ساعة واحدة
+                </li>
 
+                <li>
+                  التزود بالوقود كل 1000 ميل
+                </li>
 
-                <div>
-                  <span>
-                    Driving Limit / Day
-                  </span>
-
-                  <strong>
-                    {assumptions.daily_driving_limit}
-                    {" "}hours
-                  </strong>
-                </div>
-
-
-                <div>
-                  <span>
-                    Duty Window
-                  </span>
-
-                  <strong>
-                    {assumptions.daily_window}
-                    {" "}hours
-                  </strong>
-                </div>
-
-
-                <div>
-                  <span>
-                    Break After
-                  </span>
-
-                  <strong>
-                    {assumptions.break_after_driving_hours}
-                    {" "}hours
-                  </strong>
-                </div>
-
-
-                <div>
-                  <span>
-                    Pickup
-                  </span>
-
-                  <strong>
-                    {assumptions.pickup_hours}
-                    {" "}hour
-                  </strong>
-                </div>
-
-
-                <div>
-                  <span>
-                    Dropoff
-                  </span>
-
-                  <strong>
-                    {assumptions.dropoff_hours}
-                    {" "}hour
-                  </strong>
-                </div>
-
-
-                <div>
-                  <span>
-                    Fuel Interval
-                  </span>
-
-                  <strong>
-                    {assumptions.fuel_interval_miles}
-                    {" "}miles
-                  </strong>
-                </div>
-
-
-              </div>
-
+                <li>
+                  لا توجد ظروف قيادة جوية سيئة
+                </li>
+              </ul>
             </section>
-
-
           </>
-
         )}
-
       </main>
-
     </div>
   );
 }
-
 
 export default App;
