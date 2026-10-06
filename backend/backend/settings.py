@@ -8,11 +8,11 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 
 # Security
-SECRET_KEY = 'django-insecure-&k#4p5q12_1_5ik9ws=(zg=(4aan57oj0ul5sbnue%gcsgh+xc'
+SECRET_KEY = 'django-insecure-&k#4p5q12_1_5ik9ws=(zg=(4aan57ojul5sbnue%gcsgh+xc'
 DEBUG = True
 
 ALLOWED_HOSTS = [
-    "hos-trip-planner-taoy.onrender.com",
+    "hos-trip-planner-new.onrender.com",
     "localhost",
     "127.0.0.1",
 ]
