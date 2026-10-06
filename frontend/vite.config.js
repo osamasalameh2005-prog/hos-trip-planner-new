@@ -1,18 +1,15 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
-
 export default defineConfig({
   plugins: [
     react(),
   ],
 
-  base: "/static/frontend/",
+  base: "/",
 
   build: {
-    outDir:
-      "../backend/static/frontend",
-
+    outDir: "dist",
     emptyOutDir: true,
   },
 });
